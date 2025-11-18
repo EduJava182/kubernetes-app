@@ -24,8 +24,16 @@ jobs:
       - name: Verificar Maven
         run: mvn -version
 
+      - name: Definir versão
+        id: set_version
+        run: |
+          SHORT_SHA=${GITHUB_SHA:0:8}
+          VERSION="1.0.${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Versão definida: $VERSION"
+
       - name: Atualizar versão Maven
-        run: mvn versions:set -DnewVersion=1.0.${{ github.run_number }}-${{ github.sha::8 }}
+        run: mvn versions:set -DnewVersion=$VERSION
 
       - name: Build do projeto
         run: mvn clean package -DskipTests
@@ -71,7 +79,7 @@ jobs:
           fi
 
           # Tag da imagem Docker
-          IMAGE_TAG="${{ secrets.DOCKER_IMAGE_NAME }}:${{ github.run_number }}"
+          IMAGE_TAG="${{ secrets.DOCKER_IMAGE_NAME }}:$VERSION"
           
           # Build Docker usando ARG para o JAR dinâmico
           docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_TAG" .
