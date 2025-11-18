@@ -1,6 +1,6 @@
 name: CI/CD Pipeline
 
-# Dispara o pipeline no push para o branch main
+# Dispara o pipeline no push para o branch main!
 on:
   push:
     branches:
