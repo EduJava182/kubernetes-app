@@ -1,17 +1,18 @@
 # ---------------------------
 # Definição das etapas do pipeline
-# O GitLab vai executar na ordem: build → test → package
+# O GitLab vai executar na ordem: build → test → package → deploy
 # ---------------------------
 stages:
   - build
   - test
   - package
+  - deploy # NOVO ESTÁGIO
 
 # ---------------------------
 # Imagem Docker usada para rodar os comandos
-# Estamos usando o Maven já com JDK 17 (Temurin)
+# MUDANÇA: Usamos 'docker:latest' para permitir comandos Docker
 # ---------------------------
-image: maven:3.9.6-eclipse-temurin-17
+image: docker:latest # Imagem principal alterada
 
 # ---------------------------
 # Variáveis de ambiente
@@ -20,6 +21,8 @@ image: maven:3.9.6-eclipse-temurin-17
 # ---------------------------
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  # Nome do seu repositório no Docker Hub: yyy/nome_do_app
+  DOCKER_IMAGE_NAME: $DOCKER_USERNAME/seu_nome_do_app # ATENÇÃO: Mude 'seu_nome_do_app'
 
 # ---------------------------
 # Comandos executados antes de cada stage
@@ -35,33 +38,23 @@ before_script:
 # ==========================================================
 build:
   stage: build
+  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
   script:
-    # Mostra mensagem indicando que a versão será atualizada automaticamente
     - echo "Atualizando versão automaticamente..."
-
-    # Atualiza a versão do projeto usando números do pipeline:
-    #   CI_PIPELINE_IID         → número sequencial do pipeline
-    #   CI_COMMIT_SHORT_SHA     → hash curto do commit
-    # Exemplo de versão final gerada:
-    #   1.0.34-a91b2f1
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
-
-    # Faz o build da aplicação mas **ignora os testes**
-    # (os testes rodam no stage seguinte)
     - mvn clean package -DskipTests
   artifacts:
-    # Salva arquivos gerados para serem usados em stages seguintes
     paths:
-      - target/*.jar     # O JAR gerado pelo Maven
-      - pom.xml          # O pom atualizado com a nova versão
+      - target/*.jar
+      - pom.xml
 
 # ==========================================================
 #                       STAGE: TEST
 # ==========================================================
 test:
   stage: test
+  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
   script:
-    # Roda todos os testes da aplicação (JUnit)
     - mvn test
 
 # ==========================================================
@@ -69,13 +62,49 @@ test:
 # ==========================================================
 package:
   stage: package
+  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
   script:
-    # Exibe no terminal a versão atual do projeto
-    # Exemplo de saída:
-    #   1.0.34-a91b2f1
     - echo "Versão final do build:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
   artifacts:
-    # Salva o JAR final novamente para download pelo GitLab
     paths:
       - target/*.jar
+
+# ==========================================================
+#                       STAGE: DEPLOY
+# ==========================================================
+docker_push:
+  stage: deploy
+  image: docker:latest # Opcional, mas útil para jobs Docker
+  services:
+    - docker:dind # ESSENCIAL: Habilita Docker-in-Docker
+  script:
+    # 1. Obter a versão final criada no estágio BUILD
+    - export PROJECT_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+    - export IMAGE_FULL_TAG=$DOCKER_IMAGE_NAME:$PROJECT_VERSION
+
+    # 2. Login no Docker Hub usando as variáveis de segurança (yyy e xx)
+    # As variáveis DOCKER_USERNAME e DOCKER_PASSWORD devem ser configuradas no GitLab!
+    - echo "Fazendo login no Docker Hub..."
+    - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+
+    # 3. Construir a imagem Docker
+    # O seu Dockerfile deve estar na raiz do projeto.
+    - echo "Construindo imagem: $IMAGE_FULL_TAG"
+    - docker build -t $IMAGE_FULL_TAG .
+
+    # 4. Enviar a imagem para o Docker Hub
+    - echo "Enviando imagem para o Docker Hub..."
+    - docker push $IMAGE_FULL_TAG
+
+    # Opcional: Enviar também com a tag 'latest'
+    - docker tag $IMAGE_FULL_TAG $DOCKER_IMAGE_NAME:latest
+    - docker push $DOCKER_IMAGE_NAME:latest
+
+  # Este job só deve rodar se os estágios anteriores forem bem-sucedidos
+  needs:
+    - package
+
+  # Adicione uma regra para rodar apenas em branches específicos, se desejar
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" # Ajuste para o seu branch de produção/deploy (ex: 'main', 'master')
