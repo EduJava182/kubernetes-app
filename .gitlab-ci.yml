@@ -1,8 +1,7 @@
 # ==========================================================
 #      CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
 # ==========================================================
-# Esta imagem só será usada por jobs que NÃO definirem sua
-# própria imagem. O job de deploy usará docker para build/push.
+# A imagem global será usada apenas quando o job não definir a sua.
 image: docker:latest
 
 stages:
@@ -11,38 +10,30 @@ stages:
   - package
   - deploy
 
-
 # ==========================================================
 #                          BUILD
 # ==========================================================
 build:
   stage: build
-
-  # Imagem com Maven + Java 17
   image: maven:3.9.6-eclipse-temurin-17
 
-  # Executa ANTES do script — apenas em jobs Maven
   before_script:
     - echo "Java instalado:"
-    - java -version           # Confirma versão do Java
+    - java -version           # confirma versão do Java
     - echo "Maven instalado:"
-    - mvn -version            # Confirma versão do Maven
+    - mvn -version            # confirma versão do Maven
 
   script:
     - echo "Atualizando versão automaticamente..."
-
-    # Atualiza a versão do pom.xml para algo como:
-    # 1.0.<PIPELINE_ID>-<SHORT_SHA>
+    # Atualiza a versão no pom.xml para um valor único por pipeline/commit
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
-
-    # Executa build (gera .jar) sem rodar testes
+    # Limpa e empacota o projeto sem executar testes
     - mvn clean package -DskipTests
 
   artifacts:
     paths:
-      - target/*.jar    # Guarda o jar para as próximas etapas
-      - pom.xml         # Guarda o pom.xml atualizado
-
+      - target/*.jar
+      - pom.xml
 
 # ==========================================================
 #                          TEST
@@ -56,10 +47,7 @@ test:
     - mvn -version
 
   script:
-    # Executa todos os testes unitários
     - mvn test
-
-
 
 # ==========================================================
 #                         PACKAGE
@@ -74,55 +62,75 @@ package:
 
   script:
     - echo "Versão final detectada:"
-    # Mostra a versão final do projeto (do pom.xml)
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
 
-  artifacts:                     # <-- CORREÇÃO: precisa ser HASH
+  artifacts:
     paths:
-      - target/*.jar             # Mantém jar para o deploy
-
-
+      - target/*.jar
 
 # ==========================================================
-#                         DEPLOY
+#                         DEPLOY (DOCKER)
 # ==========================================================
 docker_push:
   stage: deploy
   image: docker:latest
-
-  # Permite rodar docker build/push dentro do runner
   services:
     - docker:dind
 
-  script:
-    # Localiza o JAR gerado no build/package
-    - export JAR_FILE=$(ls target/*.jar | head -n 1)
-    - echo "Arquivo gerado: $JAR_FILE"
+  # NOTE: usamos uma única string multilinha (|) para garantir que
+  # o GitLab interprete 'script' como uma string, evitando o erro.
+  script: |
+    #!/bin/sh
+    set -e
 
-    # Extrai a versão a partir do nome do jar (ajuste regex se necessário)
-    - export PROJECT_VERSION=$(basename "$JAR_FILE" .jar | sed -E 's/.*-([0-9]+\.[0-9]+\.[^-]+).*/\1/')
-    - echo "Versão extraída: $PROJECT_VERSION"
+    echo "Procurando o JAR em target/..."
+    JAR_FILE=$(ls target/*.jar 2>/dev/null | head -n 1 || true)
+    if [ -z "$JAR_FILE" ]; then
+      echo "ERRO: nenhum JAR encontrado em target/. Certifique-se de que o stage build/package gerou o artefato."
+      exit 1
+    fi
+    echo "JAR encontrado: $JAR_FILE"
 
-    # Monta o nome completo da imagem Docker
-    - export IMAGE_FULL_TAG="$DOCKER_IMAGE_NAME:$PROJECT_VERSION"
-    - echo "Tag final: $IMAGE_FULL_TAG"
+    # Extrai a versão do nome do JAR (ajuste se seu padrão for diferente).
+    # Exemplo de nome: meuapp-1.0.123-9f8a7c.jar
+    BASENAME=$(basename "$JAR_FILE" .jar)
+    # Tenta extrair a sequência após o último '-' como versão; ajuste conforme seu padrão.
+    PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
+    if [ -z "$PROJECT_VERSION" ]; then
+      echo "Aviso: não foi possível extrair versão do nome do JAR. Usando 'latest' como versão provisória."
+      PROJECT_VERSION=latest
+    fi
+    echo "Versão extraída: $PROJECT_VERSION"
 
-    # Login no Docker Hub — variáveis devem estar no GitLab CI/CD
-    - echo "Login no Docker Hub..."
-    - docker login -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+    # Monta tag completa da imagem
+    if [ -z "$DOCKER_IMAGE_NAME" ]; then
+      echo "ERRO: variável DOCKER_IMAGE_NAME não definida (Settings > CI/CD > Variables)."
+      exit 1
+    fi
+    IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
+    echo "Tag final: $IMAGE_FULL_TAG"
 
-    # Build da imagem Docker usando o Dockerfile da raiz
-    - docker build -t "$IMAGE_FULL_TAG" .
+    # Login no Docker Registry (mais seguro usando password-stdin)
+    if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
+      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos nas variáveis de CI."
+      exit 1
+    fi
+    echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
-    # Envia imagem com a tag da versão
-    - docker push "$IMAGE_FULL_TAG"
+    # Build e push
+    echo "Construindo imagem Docker..."
+    docker build -t "$IMAGE_FULL_TAG" .
 
-    # Atualiza a tag "latest"
-    - docker tag "$IMAGE_FULL_TAG" "$DOCKER_IMAGE_NAME:latest"
-    - docker push "$DOCKER_IMAGE_NAME:latest"
+    echo "Enviando imagem: $IMAGE_FULL_TAG"
+    docker push "$IMAGE_FULL_TAG"
+
+    # Atualizar tag latest (opcional)
+    echo "Tagueando como latest e fazendo push..."
+    docker tag "$IMAGE_FULL_TAG" "${DOCKER_IMAGE_NAME}:latest"
+    docker push "${DOCKER_IMAGE_NAME}:latest"
 
   needs:
     - package
 
   rules:
-    - if: $CI_COMMIT_BRANCH == "master"   # Só roda no branch master
+    - if: $CI_COMMIT_BRANCH == "master"
