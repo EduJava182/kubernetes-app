@@ -1,110 +1,141 @@
-# ---------------------------
-# Definição das etapas do pipeline
-# O GitLab vai executar na ordem: build → test → package → deploy
-# ---------------------------
+# ==========================================================
+#             CONFIGURAÇÃO GLOBAL DO PIPELINE
+# ==========================================================
+
+# A imagem global é usada SOMENTE quando um job NÃO define sua própria imagem.
+# Aqui usamos docker:latest apenas para o job de deploy.
+image: docker:latest
+
 stages:
   - build
   - test
   - package
-  - deploy # NOVO ESTÁGIO
+  - deploy
 
-# ---------------------------
-# Imagem Docker usada para rodar os comandos
-# MUDANÇA: Usamos 'docker:latest' para permitir comandos Docker
-# ---------------------------
-image: docker:latest # Imagem principal alterada
 
-# ---------------------------
-# Variáveis de ambiente
-# Aqui definimos que o repositório Maven será baixado localmente,
-# evitando downloads repetidos e acelerando o pipeline.
-# ---------------------------
-variables:
-  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
-  # Nome do seu repositório no Docker Hub: yyy/nome_do_app
-  DOCKER_IMAGE_NAME: $DOCKER_USERNAME/seu_nome_do_app # ATENÇÃO: Mude 'seu_nome_do_app'
+# ==========================================================
+#   IMPORTANTE: NÃO USAR before_script GLOBAL COM JAVA !!
+# ==========================================================
+# Antes você tinha:
+#
+# before_script:
+#   - java -version
+#   - mvn -version
+#
+# Isso é um erro pois jobs usando "docker:latest" NÃO têm Java/Maven.
+# Agora cada job Maven terá seu próprio before_script.
+# ==========================================================
 
-# ---------------------------
-# Comandos executados antes de cada stage
-# Apenas para conferência (versão do Java e Maven)
-# ---------------------------
-before_script:
-  - echo "Java:"
-  - java -version
-  - mvn -version
+
 
 # ==========================================================
 #                       STAGE: BUILD
 # ==========================================================
 build:
   stage: build
-  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
+
+  # Esta imagem TEM Java + Maven
+  image: maven:3.9.6-eclipse-temurin-17
+
+  before_script:
+    - echo "Java:"
+    - java -version
+    - mvn -version
+
   script:
     - echo "Atualizando versão automaticamente..."
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
     - mvn clean package -DskipTests
+
   artifacts:
     paths:
       - target/*.jar
       - pom.xml
+
+
 
 # ==========================================================
 #                       STAGE: TEST
 # ==========================================================
 test:
   stage: test
-  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
+  image: maven:3.9.6-eclipse-temurin-17
+
+  before_script:
+    - echo "Java:"
+    - java -version
+    - mvn -version
+
   script:
     - mvn test
 
+
+
 # ==========================================================
-#                      STAGE: PACKAGE
+#                       STAGE: PACKAGE
 # ==========================================================
 package:
   stage: package
-  image: maven:3.9.6-eclipse-temurin-17 # Imagem Maven específica para este job
+  image: maven:3.9.6-eclipse-temurin-17
+
+  before_script:
+    - java -version
+    - mvn -version
+
   script:
     - echo "Versão final do build:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
+
   artifacts:
     paths:
       - target/*.jar
+
+
 
 # ==========================================================
 #                       STAGE: DEPLOY
 # ==========================================================
 docker_push:
   stage: deploy
-  image: docker:latest # Opcional, mas útil para jobs Docker
+
+  # ESSENCIAL: para poder usar docker build/push
+  image: docker:latest
+
   services:
-    - docker:dind # ESSENCIAL: Habilita Docker-in-Docker
+    - docker:dind
+
+  # ESTE JOB NÃO USA JAVA — NÃO COLOCAR before_script AQUI!
   script:
-    # 1. Obter a versão final criada no estágio BUILD
+    # 1. Obter versão do projeto
     - export PROJECT_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+
+    # 2. Construir nome completo da imagem
     - export IMAGE_FULL_TAG=$DOCKER_IMAGE_NAME:$PROJECT_VERSION
 
-    # 2. Login no Docker Hub usando as variáveis de segurança (yyy e xx)
-    # As variáveis DOCKER_USERNAME e DOCKER_PASSWORD devem ser configuradas no GitLab!
+    # 3. Login no Docker Hub
     - echo "Fazendo login no Docker Hub..."
-    - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+    - docker login -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
 
-    # 3. Construir a imagem Docker
-    # O seu Dockerfile deve estar na raiz do projeto.
-#    - echo "Construindo imagem: $IMAGE_FULL_TAG"
+    # 4. Construir imagem Docker
+    - echo "Construindo imagem: $IMAGE_FULL_TAG"
     - docker build -t $IMAGE_FULL_TAG .
 
-    # 4. Enviar a imagem para o Docker Hub
+    # 5. Push da imagem com versão
     - echo "Enviando imagem para o Docker Hub..."
     - docker push $IMAGE_FULL_TAG
 
-    # Opcional: Enviar também com a tag 'latest'
+    # 6. Push da tag latest (opcional)
     - docker tag $IMAGE_FULL_TAG $DOCKER_IMAGE_NAME:latest
     - docker push $DOCKER_IMAGE_NAME:latest
 
-  # Este job só deve rodar se os estágios anteriores forem bem-sucedidos
   needs:
     - package
 
-  # Adicione uma regra para rodar apenas em branches específicos, se desejar
   rules:
-    - if: $CI_COMMIT_BRANCH == "master" # Ajuste para o seu branch de produção/deploy (ex: 'main', 'master')
+    # Só roda no branch master
+    - if: $CI_COMMIT_BRANCH == "master"
+
+
+# ==========================================================
+# FIM DO ARQUIVO
+# ==========================================================
