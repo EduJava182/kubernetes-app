@@ -14,9 +14,7 @@ before_script:
 build:
   stage: build
   script:
-    # Incrementa versão com o número do pipeline
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
-    # Compila o projeto
     - mvn clean package -DskipTests
   artifacts:
     paths:
@@ -30,7 +28,5 @@ test:
 package:
   stage: package
   script:
-    - echo "Versão final do build: $(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
-    # Aqui você poderia construir a imagem Docker com tag única
-    - docker build -t myregistry/myapp:1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA .
-    - docker push myregistry/myapp:1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
+    - echo "Versão final do build:"
+    - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
