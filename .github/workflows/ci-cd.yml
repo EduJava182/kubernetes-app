@@ -1,5 +1,6 @@
 name: CI/CD Pipeline
 
+# Dispara o pipeline no push para o branch main
 on:
   push:
     branches:
@@ -74,8 +75,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: test
-    env:
-      VERSION: ${{ needs.build.outputs.version }}
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
@@ -96,6 +95,8 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build e push da imagem Docker
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           # Pega o JAR gerado
           JAR_FILE=$(ls target/*.jar | head -n 1)
