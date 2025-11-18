@@ -102,6 +102,12 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
+          # Verifica se a versão foi carregada
+          if [ -z "$VERSION" ]; then
+            echo "ERRO: Variável de versão (\$VERSION) está vazia!"
+            exit 1
+          fi
+
           # Pega o JAR gerado
           JAR_FILE=$(ls target/*.jar | head -n 1)
           if [ -z "$JAR_FILE" ]; then
@@ -109,14 +115,11 @@ jobs:
             exit 1
           fi
 
-          # Verifica se o secret DOCKER_IMAGE_NAME está preenchido
-          if [ -z "${{ secrets.DOCKER_IMAGE_NAME }}" ]; then
-            echo "ERRO: secret DOCKER_IMAGE_NAME não definido!"
-            exit 1
-          fi
+          # Nome e tag da imagem Docker
+          IMAGE_NAME="${{ secrets.DOCKER_IMAGE_NAME }}"
+          IMAGE_TAG="$IMAGE_NAME:$VERSION"
 
-          # Tag da imagem Docker
-          IMAGE_TAG="${{ secrets.DOCKER_IMAGE_NAME }}:$VERSION"
+          echo "Construindo imagem: $IMAGE_TAG"
 
           # Build Docker usando ARG para o JAR dinâmico
           docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_TAG" .
