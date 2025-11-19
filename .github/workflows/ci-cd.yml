@@ -6,9 +6,9 @@ on:
       - main
 
 jobs:
-  # ==========================================================
+  # =============================
   # JOB 1: Build Maven e salvar artefato
-  # ==========================================================
+  # =============================
   build:
     runs-on: ubuntu-latest
     container:
@@ -26,15 +26,15 @@ jobs:
       - name: Build do projeto
         run: mvn clean package -DskipTests
 
-      - name: Salvar JAR como artefato
+      - name: Salvar artefato JAR
         uses: actions/upload-artifact@v4
         with:
           name: jar
           path: target/*.jar
 
-  # ==========================================================
+  # =============================
   # JOB 2: Testes Maven
-  # ==========================================================
+  # =============================
   test:
     runs-on: ubuntu-latest
     needs: build
@@ -44,19 +44,19 @@ jobs:
       - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Baixar artefato JAR
+      - name: Baixar artefato
         uses: actions/download-artifact@v4
         with:
           name: jar
           path: target
 
-      - name: Executar testes Maven
+      - name: Executar testes
         run: mvn test
 
-  # ==========================================================
-  # JOB 3: Deploy Docker
-  # ==========================================================
-  deploy:
+  # =============================
+  # JOB 3: Build + Push Docker
+  # =============================
+  docker:
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -78,30 +78,53 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build e push da imagem Docker
+      - name: Build e push Docker
         env:
           IMAGE_NAME: ${{ secrets.DOCKER_IMAGE_NAME }}
         run: |
-          # Versão fixa
-          VERSION="1.0.0"
-
-          # Pega o JAR gerado
+          VERSION="1.0.0"   # FIXO COMO VOCÊ PEDIU
+          
           JAR_FILE=$(ls target/*.jar | head -n 1)
           if [ -z "$JAR_FILE" ]; then
             echo "ERRO: JAR não encontrado!"
             exit 1
           fi
 
-          # Tag da imagem
           IMAGE_TAG="$IMAGE_NAME:$VERSION"
-          echo "Construindo imagem: $IMAGE_TAG"
 
-          # Build Docker usando ARG para o JAR dinâmico
           docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_TAG" .
-
-          # Push da imagem com a versão
           docker push "$IMAGE_TAG"
 
-          # Atualiza tag latest
           docker tag "$IMAGE_TAG" "$IMAGE_NAME:latest"
           docker push "$IMAGE_NAME:latest"
+
+      - name: Salvar nome da imagem para o próximo job
+        run: echo "IMAGE=${{ secrets.DOCKER_IMAGE_NAME }}:latest" >> $GITHUB_ENV
+
+  # =============================
+  # JOB 4: DEPLOY NA EC2
+  # =============================
+  deploy:
+    needs: docker
+    runs-on: self-hosted
+
+
+    steps:
+      - name: Criar chave SSH
+        run: |
+          echo "${{ secrets.EC2_KEY }}" > ec2_key.pem
+          chmod 600 ec2_key.pem
+
+      - name: Deploy na EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ec2_key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            echo "=== Atualizando Docker ==="
+            sudo docker pull ${{ secrets.DOCKER_IMAGE_NAME }}:latest
+
+            echo "=== Parando container antigo ==="
+            sudo docker stop meuapp || true
+            sudo docker rm meuapp || true
+
+            echo "=== Subindo container novo ==="
+            sudo docker run -d --name meuapp -p 80:8080 ${{ secrets.DOCKER_IMAGE_NAME }}:latest
+          EOF
