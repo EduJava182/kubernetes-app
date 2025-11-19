@@ -1,5 +1,5 @@
 # ==========================================================
-# CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
+#      CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
 # ==========================================================
 image: docker:latest
 
@@ -10,61 +10,70 @@ stages:
   - deploy
 
 # ==========================================================
-# BUILD
+#                          BUILD
 # ==========================================================
 build:
   stage: build
   image: maven:3.9.6-eclipse-temurin-17
+
   before_script:
     - echo "Java instalado:"
     - java -version
     - echo "Maven instalado:"
     - mvn -version
+
   script:
     - echo "Atualizando versão automaticamente..."
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
     - mvn clean package -DskipTests
+
   artifacts:
     paths:
       - target/*.jar
       - pom.xml
 
 # ==========================================================
-# TEST
+#                          TEST
 # ==========================================================
 test:
   stage: test
   image: maven:3.9.6-eclipse-temurin-17
+
   before_script:
     - java -version
     - mvn -version
+
   script:
     - mvn test
 
 # ==========================================================
-# PACKAGE
+#                         PACKAGE
 # ==========================================================
 package:
   stage: package
   image: maven:3.9.6-eclipse-temurin-17
+
   before_script:
     - java -version
     - mvn -version
+
   script:
     - echo "Versão final detectada:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
+
   artifacts:
     paths:
       - target/*.jar
 
 # ==========================================================
-# DEPLOY - Build e push da imagem Docker
+#                         DEPLOY (DOCKER HUB)
 # ==========================================================
 docker_push:
   stage: deploy
   image: docker:latest
   services:
     - docker:dind
+
   script: |
     #!/bin/sh
     set -e
@@ -72,35 +81,47 @@ docker_push:
     echo "Procurando o JAR em target/..."
     JAR_FILE=$(ls target/*.jar | head -n 1)
     if [ -z "$JAR_FILE" ]; then
-      echo "ERRO: nenhum JAR encontrado em target/"
+      echo "ERRO: nenhum JAR encontrado em target/. Certifique-se de que o stage build/package gerou o artefato."
       exit 1
     fi
+    echo "JAR encontrado: $JAR_FILE"
 
+    # Extrai a versão do nome do JAR
     BASENAME=$(basename "$JAR_FILE" .jar)
     PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
-    [ -z "$PROJECT_VERSION" ] && PROJECT_VERSION=latest
+    if [ -z "$PROJECT_VERSION" ]; then
+      echo "Aviso: não foi possível extrair versão. Usando 'latest'."
+      PROJECT_VERSION=latest
+    fi
     echo "Versão extraída: $PROJECT_VERSION"
 
-    [ -z "$DOCKER_IMAGE_NAME" ] && { echo "ERRO: DOCKER_IMAGE_NAME não definido"; exit 1; }
-
+    if [ -z "$DOCKER_IMAGE_NAME" ]; then
+      echo "ERRO: variável DOCKER_IMAGE_NAME não definida."
+      exit 1
+    fi
     IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
     echo "Tag final: $IMAGE_FULL_TAG"
 
-    [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ] && { echo "ERRO: credenciais Docker não definidas"; exit 1; }
-
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+    echo "Construindo imagem Docker..."
     docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_FULL_TAG" .
+
+    echo "Enviando imagem: $IMAGE_FULL_TAG"
     docker push "$IMAGE_FULL_TAG"
+
+    echo "Tagueando como latest e fazendo push..."
     docker tag "$IMAGE_FULL_TAG" "${DOCKER_IMAGE_NAME}:latest"
     docker push "${DOCKER_IMAGE_NAME}:latest"
 
   needs:
     - package
+
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
 
 # ==========================================================
-# DEPLOY - Atualizar container na EC2
+#                         DEPLOY (EC2)
 # ==========================================================
 deploy_to_ec2:
   stage: deploy
@@ -110,7 +131,8 @@ deploy_to_ec2:
   script:
     - echo "$EC2_KEY" > ec2_key.pem
     - chmod 600 ec2_key.pem
-    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
+    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << EOF
+      set -e
       echo "=== Atualizando Docker ==="
       sudo docker pull $DOCKER_IMAGE_NAME:latest
       
@@ -120,6 +142,8 @@ deploy_to_ec2:
       
       echo "=== Subindo container novo ==="
       sudo docker run -d --name meuapp -p 80:8080 $DOCKER_IMAGE_NAME:latest
+      
+      echo "=== Deploy concluído ==="
       EOF
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
