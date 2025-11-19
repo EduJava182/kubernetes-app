@@ -15,6 +15,6 @@ class TestControllerTest {
         String response = controller.test();
 
         // Assert — validar o resultado
-        assertEquals("test GitLab", response, "O método deve retornar 'test GitLab'");
+        assertEquals("test GitLab!", response, "O método deve retornar 'test GitLab'");
     }
 }
