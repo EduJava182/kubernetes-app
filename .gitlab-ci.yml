@@ -15,18 +15,15 @@ stages:
 build:
   stage: build
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - echo "Java instalado:"
     - java -version
     - echo "Maven instalado:"
     - mvn -version
-
   script:
     - echo "Atualizando versão automaticamente..."
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
     - mvn clean package -DskipTests
-
   artifacts:
     paths:
       - target/*.jar
@@ -38,11 +35,9 @@ build:
 test:
   stage: test
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - java -version
     - mvn -version
-
   script:
     - mvn test
 
@@ -52,28 +47,24 @@ test:
 package:
   stage: package
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - java -version
     - mvn -version
-
   script:
     - echo "Versão final detectada:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
-
   artifacts:
     paths:
       - target/*.jar
 
 # ==========================================================
-#                         DEPLOY (DOCKER HUB)
+#                         DEPLOY (DOCKER)
 # ==========================================================
 docker_push:
   stage: deploy
   image: docker:latest
   services:
     - docker:dind
-
   script: |
     #!/bin/sh
     set -e
@@ -86,11 +77,9 @@ docker_push:
     fi
     echo "JAR encontrado: $JAR_FILE"
 
-    # Extrai a versão do nome do JAR
     BASENAME=$(basename "$JAR_FILE" .jar)
     PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
     if [ -z "$PROJECT_VERSION" ]; then
-      echo "Aviso: não foi possível extrair versão. Usando 'latest'."
       PROJECT_VERSION=latest
     fi
     echo "Versão extraída: $PROJECT_VERSION"
@@ -102,6 +91,10 @@ docker_push:
     IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
     echo "Tag final: $IMAGE_FULL_TAG"
 
+    if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
+      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos."
+      exit 1
+    fi
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
     echo "Construindo imagem Docker..."
@@ -113,16 +106,11 @@ docker_push:
     echo "Tagueando como latest e fazendo push..."
     docker tag "$IMAGE_FULL_TAG" "${DOCKER_IMAGE_NAME}:latest"
     docker push "${DOCKER_IMAGE_NAME}:latest"
-
   needs:
     - package
-
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
 
-# ==========================================================
-#                         DEPLOY (EC2)
-# ==========================================================
 deploy_to_ec2:
   stage: deploy
   image: alpine:latest
@@ -131,19 +119,18 @@ deploy_to_ec2:
   script:
     - echo "$EC2_KEY" > ec2_key.pem
     - chmod 600 ec2_key.pem
-    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << EOF
-      set -e
+    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
       echo "=== Atualizando Docker ==="
       sudo docker pull $DOCKER_IMAGE_NAME:latest
-      
+
       echo "=== Parando container antigo ==="
       sudo docker stop meuapp || true
       sudo docker rm meuapp || true
-      
+
       echo "=== Subindo container novo ==="
       sudo docker run -d --name meuapp -p 80:8080 $DOCKER_IMAGE_NAME:latest
-      
-      echo "=== Deploy concluído ==="
       EOF
+  needs:
+    - docker_push
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
