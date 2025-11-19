@@ -128,3 +128,26 @@ docker_push:
 
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
+
+deploy_to_ec2:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+  script:
+    - echo "$EC2_KEY" > ec2_key.pem
+    - chmod 600 ec2_key.pem
+    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
+      echo "=== Atualizando Docker ==="
+      sudo docker pull $DOCKER_IMAGE_NAME:latest
+      
+      echo "=== Parando container antigo ==="
+      sudo docker stop meuapp || true
+      sudo docker rm meuapp || true
+      
+      echo "=== Subindo container novo ==="
+      sudo docker run -d --name meuapp -p 80:8080 $DOCKER_IMAGE_NAME:latest
+      EOF
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+
