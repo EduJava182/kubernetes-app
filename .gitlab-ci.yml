@@ -1,5 +1,5 @@
 # ==========================================================
-#      CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
+# CONFIGURAÇÃO GLOBAL — IMAGEM PADRÃO DO PIPELINE
 # ==========================================================
 image: docker:latest
 
@@ -10,70 +10,61 @@ stages:
   - deploy
 
 # ==========================================================
-#                          BUILD
+# BUILD
 # ==========================================================
 build:
   stage: build
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - echo "Java instalado:"
     - java -version
     - echo "Maven instalado:"
     - mvn -version
-
   script:
     - echo "Atualizando versão automaticamente..."
     - mvn versions:set -DnewVersion=1.0.$CI_PIPELINE_IID-$CI_COMMIT_SHORT_SHA
     - mvn clean package -DskipTests
-
   artifacts:
     paths:
       - target/*.jar
       - pom.xml
 
 # ==========================================================
-#                          TEST
+# TEST
 # ==========================================================
 test:
   stage: test
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - java -version
     - mvn -version
-
   script:
     - mvn test
 
 # ==========================================================
-#                         PACKAGE
+# PACKAGE
 # ==========================================================
 package:
   stage: package
   image: maven:3.9.6-eclipse-temurin-17
-
   before_script:
     - java -version
     - mvn -version
-
   script:
     - echo "Versão final detectada:"
     - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
-
   artifacts:
     paths:
       - target/*.jar
 
 # ==========================================================
-#                         DEPLOY (DOCKER)
+# DEPLOY - Build e push da imagem Docker
 # ==========================================================
 docker_push:
   stage: deploy
   image: docker:latest
   services:
     - docker:dind
-
   script: |
     #!/bin/sh
     set -e
@@ -81,54 +72,36 @@ docker_push:
     echo "Procurando o JAR em target/..."
     JAR_FILE=$(ls target/*.jar | head -n 1)
     if [ -z "$JAR_FILE" ]; then
-      echo "ERRO: nenhum JAR encontrado em target/. Certifique-se de que o stage build/package gerou o artefato."
+      echo "ERRO: nenhum JAR encontrado em target/"
       exit 1
     fi
-    echo "JAR encontrado: $JAR_FILE"
 
-    # Extrai a versão do nome do JAR (última parte do nome)
     BASENAME=$(basename "$JAR_FILE" .jar)
     PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
-    if [ -z "$PROJECT_VERSION" ]; then
-      echo "Aviso: não foi possível extrair versão. Usando 'latest'."
-      PROJECT_VERSION=latest
-    fi
+    [ -z "$PROJECT_VERSION" ] && PROJECT_VERSION=latest
     echo "Versão extraída: $PROJECT_VERSION"
 
-    # Verifica se DOCKER_IMAGE_NAME está definido
-    if [ -z "$DOCKER_IMAGE_NAME" ]; then
-      echo "ERRO: variável DOCKER_IMAGE_NAME não definida (Settings > CI/CD > Variables)."
-      exit 1
-    fi
+    [ -z "$DOCKER_IMAGE_NAME" ] && { echo "ERRO: DOCKER_IMAGE_NAME não definido"; exit 1; }
+
     IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
     echo "Tag final: $IMAGE_FULL_TAG"
 
-    # Login no Docker Hub
-    if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
-      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos."
-      exit 1
-    fi
+    [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ] && { echo "ERRO: credenciais Docker não definidas"; exit 1; }
+
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-
-    # Build da imagem Docker usando ARG para o jar dinâmico
-    echo "Construindo imagem Docker..."
     docker build --build-arg JAR_FILE="$JAR_FILE" -t "$IMAGE_FULL_TAG" .
-
-    # Push da imagem
-    echo "Enviando imagem: $IMAGE_FULL_TAG"
     docker push "$IMAGE_FULL_TAG"
-
-    # Atualiza tag latest
-    echo "Tagueando como latest e fazendo push..."
     docker tag "$IMAGE_FULL_TAG" "${DOCKER_IMAGE_NAME}:latest"
     docker push "${DOCKER_IMAGE_NAME}:latest"
 
   needs:
     - package
-
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
 
+# ==========================================================
+# DEPLOY - Atualizar container na EC2
+# ==========================================================
 deploy_to_ec2:
   stage: deploy
   image: alpine:latest
@@ -150,4 +123,3 @@ deploy_to_ec2:
       EOF
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
-
