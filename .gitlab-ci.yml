@@ -80,6 +80,7 @@ docker_push:
     BASENAME=$(basename "$JAR_FILE" .jar)
     PROJECT_VERSION=$(echo "$BASENAME" | awk -F'-' '{print $NF}')
     if [ -z "$PROJECT_VERSION" ]; then
+      echo "Aviso: não foi possível extrair versão. Usando 'latest'."
       PROJECT_VERSION=latest
     fi
     echo "Versão extraída: $PROJECT_VERSION"
@@ -91,10 +92,6 @@ docker_push:
     IMAGE_FULL_TAG="${DOCKER_IMAGE_NAME}:${PROJECT_VERSION}"
     echo "Tag final: $IMAGE_FULL_TAG"
 
-    if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
-      echo "ERRO: DOCKER_USERNAME ou DOCKER_PASSWORD não definidos."
-      exit 1
-    fi
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
     echo "Construindo imagem Docker..."
@@ -119,16 +116,27 @@ deploy_to_ec2:
   script:
     - echo "$EC2_KEY" > ec2_key.pem
     - chmod 600 ec2_key.pem
-    - ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
-      echo "=== Atualizando Docker ==="
-      sudo docker pull $DOCKER_IMAGE_NAME:latest
+    - |
+      ssh -o StrictHostKeyChecking=no -i ec2_key.pem $EC2_USER@$EC2_HOST << 'EOF'
+        set -e
+        echo "=== Conectou na EC2 ==="
 
-      echo "=== Parando container antigo ==="
-      sudo docker stop meuapp || true
-      sudo docker rm meuapp || true
+        echo "=== Status do Docker antes ==="
+        sudo docker ps -a || true
+        sudo docker images || true
 
-      echo "=== Subindo container novo ==="
-      sudo docker run -d --name meuapp -p 80:8080 $DOCKER_IMAGE_NAME:latest
+        echo "=== Atualizando Docker ==="
+        sudo docker pull $DOCKER_IMAGE_NAME:latest
+
+        echo "=== Parando container antigo ==="
+        sudo docker stop meuapp || true
+        sudo docker rm meuapp || true
+
+        echo "=== Subindo container novo ==="
+        sudo docker run -d --name meuapp -p 80:8080 $DOCKER_IMAGE_NAME:latest
+
+        echo "=== Status do Docker depois ==="
+        sudo docker ps -a
       EOF
   needs:
     - docker_push
